@@ -1,4 +1,4 @@
-#  first we build a  environment  or actual game 
+# Custom 32x32 Pong environment used to collect data for the world model
 import numpy as np
 
 
@@ -67,6 +67,7 @@ class My_pong:
         self.ball_vy = float(speed_y)
 
         self.steps = 0
+        self.last_hit = False
 
         return self.observe()
 
@@ -150,7 +151,7 @@ class My_pong:
 
     # ---------------- WALL COLLISIONS ----------------
 
-    def handle_wall_collison(self):
+    def handle_side_and_top_walls(self):
 
         radius = self.BALL_RADIUS
 
@@ -160,9 +161,8 @@ class My_pong:
             self.ball_vx = abs(self.ball_vx)
 
         # Right wall
-        right_limit = self.SIZE - 1 - radius
-
-        if self.ball_x > right_limit:
+        elif self.ball_x > self.SIZE - 1 - radius:
+            right_limit = self.SIZE - 1 - radius
             self.ball_x = 2 * right_limit - self.ball_x
             self.ball_vx = -abs(self.ball_vx)
 
@@ -171,9 +171,10 @@ class My_pong:
             self.ball_y = 2 * radius - self.ball_y
             self.ball_vy = abs(self.ball_vy)
 
-        # Bottom wall
+    def handle_bottom_wall(self):
+
         # Keep the ball bouncing for a continuous game.
-        bottom_limit = self.SIZE - 1 - radius
+        bottom_limit = self.SIZE - 1 - self.BALL_RADIUS
 
         if self.ball_y > bottom_limit:
             self.ball_y = 2 * bottom_limit - self.ball_y
@@ -236,20 +237,7 @@ class My_pong:
         self.move_ball()
 
         # Handle side and top wall collisions first
-        radius = self.BALL_RADIUS
-
-        if self.ball_x < radius:
-            self.ball_x = 2 * radius - self.ball_x
-            self.ball_vx = abs(self.ball_vx)
-
-        elif self.ball_x > self.SIZE - 1 - radius:
-            limit = self.SIZE - 1 - radius
-            self.ball_x = 2 * limit - self.ball_x
-            self.ball_vx = -abs(self.ball_vx)
-
-        if self.ball_y < radius:
-            self.ball_y = 2 * radius - self.ball_y
-            self.ball_vy = abs(self.ball_vy)
+        self.handle_side_and_top_walls()
 
         # Paddle collision before bottom-wall collision
         hit_paddle = self.handle_paddle_collision(action)
@@ -257,16 +245,14 @@ class My_pong:
         # If the ball did not hit the paddle, the bottom wall
         # still makes it bounce to keep the game continuous.
         if not hit_paddle:
-            bottom_limit = self.SIZE - 1 - radius
+            self.handle_bottom_wall()
 
-            if self.ball_y > bottom_limit:
-                self.ball_y = 2 * bottom_limit - self.ball_y
-                self.ball_vy = -abs(self.ball_vy)
+        # Remember whether the paddle hit the ball (useful as a reward later)
+        self.last_hit = hit_paddle
 
         # Count time steps
         self.steps += 1
 
         done = self.steps >= self.MAX_STEPS
 
-        
         return self.observe(), done
