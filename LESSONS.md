@@ -64,6 +64,8 @@ Each lesson follows the same pattern:
 | **Fix** | Two changes in `train_dynamics.py`: small noise on the inputs during one-step training, so the model learns to *correct* errors, and **closed-loop training**, where the model must run 5, then 15, then 30 steps on its own predictions, with a pixel loss through the frozen decoder. |
 | **Rule** | **Train under the conditions you will deploy in.** |
 
+> **In the literature:** Oh et al. [3] train Atari video predictors with a multi-step objective and a short-to-long curriculum because "small prediction errors can compound through time", the same idea as the 5 → 15 → 30-step closed-loop stages here. GameNGen [2] names the same train/inference mismatch as the cause of drift, and fixes it by adding noise to the context frames during training, like the input noise used here.
+
 **Measured in this repo:** see the table under lesson 8, where closed-loop training alone is the baseline.
 
 ## 7. Make the easy answer easy to express
@@ -99,6 +101,22 @@ Re-encoding is the single biggest improvement: the ball stays visible instead of
 
 ![ball tracking](outputs/ball_tracking.png)
 
+**Is this a standard technique?** Yes. In the video-prediction literature it is usually called *feeding generated frames back into the encoder* (pixel-space autoregression):
+
+- **SVG** [1]: after a few real frames, the model generates the future "by passing generated frames back into the input of the prediction model".
+- **GameNGen** [2], a diffusion model that simulates DOOM in real time, encodes its own previously generated frames back into latent space as context for the next frame.
+
+There are two schools, with a real trade-off:
+
+| | Dream in latent space only | Decode and re-encode every step |
+|---|---|---|
+| Used by | *World Models* [4], Dreamer [5] | SVG [1], GameNGen [2], most video predictors |
+| Speed | Fast: no image is drawn while imagining | Slower: one decoder and one encoder pass per step |
+| Drift | Codes can wander off the data, and the image fades | Codes stay on realistic frames |
+| Best when | Training an agent on millions of imagined steps | The imagined frames themselves must look right |
+
+This repo started in the first school (and saw the ball fade) and moved to the second.
+
 ---
 
 ## How to think about any model like this
@@ -115,3 +133,21 @@ Basic thinking checks whether each part works **on its own**. The fixes above al
 - **Drift is reduced, not removed.** The ball's *position* still drifts (~11 px after 40 steps), especially after fast bounces near corners. The autoencoder and dynamics model are trained separately, so the codes are never shaped for prediction from the start. Training them jointly (as Dreamer-style models do) is the natural next step.
 - **The world is deterministic.** With real randomness (for example, a ball that respawns at a random place), a deterministic predictor would output the *average* of all possible futures, a blurry future that never happens. Stochastic latents or mixture outputs are needed for that.
 - **No agent yet.** The world model is learned, but nothing is trained to *act* inside it.
+
+---
+
+## References
+
+1. E. Denton, R. Fergus. **Stochastic Video Generation with a Learned Prior.** ICML 2018. [paper](https://proceedings.mlr.press/v80/denton18a.html) · [arXiv:1802.07687](https://arxiv.org/abs/1802.07687)
+2. D. Valevski, Y. Leviathan, M. Arar, S. Fruchter. **Diffusion Models Are Real-Time Game Engines** (GameNGen). ICLR 2025. [arXiv:2408.14837](https://arxiv.org/abs/2408.14837)
+3. J. Oh, X. Guo, H. Lee, R. Lewis, S. Singh. **Action-Conditional Video Prediction using Deep Networks in Atari Games.** NeurIPS 2015. [arXiv:1507.08750](https://arxiv.org/abs/1507.08750)
+4. D. Ha, J. Schmidhuber. **World Models.** 2018. [arXiv:1803.10122](https://arxiv.org/abs/1803.10122) · [interactive version](https://worldmodels.github.io)
+5. D. Hafner, J. Pasukonis, J. Ba, T. Lillicrap. **Mastering Diverse Domains through World Models** (DreamerV3). 2023. [arXiv:2301.04104](https://arxiv.org/abs/2301.04104)
+
+---
+
+<div align="center">
+
+⭐ **If these lessons helped you, consider giving the repo a star!** ⭐
+
+</div>

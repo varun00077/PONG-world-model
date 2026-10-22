@@ -14,6 +14,8 @@
 
 *Left: the real game. Right: the world model's imagined rollout. After 10 real frames, the game engine is switched off and the model predicts every frame from its own previous predictions, given only the actions.*
 
+⭐ **If you find this project useful or interesting, please give it a star!** ⭐
+
 </div>
 
 ---
@@ -51,7 +53,7 @@ flowchart LR
 3. **Predict:** one frame shows *where* the ball is, never *where it's going*, so the dynamics model is a **GRU** whose memory recovers the velocity. It predicts the *change* in the code.
 4. **Dream:** warm up the memory on 10 real frames, switch the game off, and let the model run on its own predictions. After every step the imagined frame is **decoded and encoded again**, which snaps the code back to one a real frame could produce, so the ball cannot dissolve into blur.
 
-> 📖 **Why each of these details is needed, and what breaks without it:** see **[LESSONS.md](LESSONS.md)**.
+> 📖 **Why each of these details is needed, and what breaks without it:** see **[LESSONS.md](LESSONS.md)**, with references to SVG, GameNGen, Oh et al. (2015), World Models and DreamerV3.
 
 ---
 
@@ -175,5 +177,7 @@ print(env.last_hit)                  # did the paddle hit the ball this step?
 <div align="center">
 
 **📖 Read next: [LESSONS.md](LESSONS.md)**, eight things the basic approach misses and how to think about them.
+
+⭐ **Found this useful? Star the repo so others can find it too!** ⭐
 
 </div>
