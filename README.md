@@ -35,23 +35,15 @@
 
 ```mermaid
 flowchart LR
-    subgraph Collect["1 · Collect"]
-        G[🎮 Pong env] -->|random play| D[(frames + actions)]
-    end
-    subgraph Compress["2 · Compress"]
-        E[Encoder] --> Z((z<br/>16 numbers)) --> Dec[Decoder]
-    end
-    subgraph Predict["3 · Predict"]
-        Z2((z_t)) --> M[GRU memory]
-        A[action_t] --> M
-        M -->|predicts change| Z3((z_t+1))
-    end
-    subgraph Dream["4 · Dream"]
-        Z3 -.->|fed back in| Z2
-        Z3 --> Dec2[Decoder] --> F[🖼️ imagined frame]
-    end
-    D --> E
-    Z --> Z2
+    G["Pong env"] -->|"random play"| D[("frames + actions")]
+    D --> E["Encoder"]
+    E --> Z(("z_t: 16 numbers"))
+    Z --> M["GRU memory"]
+    A["action_t"] --> M
+    M -->|"predicts the change"| Z2(("z_t+1"))
+    Z2 -.->|"fed back in while dreaming"| M
+    Z2 --> Dec["Decoder"]
+    Dec --> F["imagined frame"]
 ```
 
 1. **Collect:** play the game randomly with "sticky" actions (keys are held, as a human would) and record 200 episodes × 120 steps.
