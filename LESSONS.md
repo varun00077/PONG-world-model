@@ -61,19 +61,10 @@ Each lesson follows the same pattern:
 |---|---|
 | **Basic thinking** | If the model predicts one step ahead well, chain its predictions for long rollouts. |
 | **What happens** | During training the model always receives the *real* previous code. While dreaming it receives its *own* slightly wrong prediction. It never practised recovering, so errors compound and the ball drifts away within a few dozen steps. This is called **exposure bias**. |
-| **Fix** | Two changes in `train_dynamics.py`: small noise on the inputs during one-step training, so the model learns to *correct* errors, and **closed-loop training**, where the model must run 5, then 15, steps on its own predictions, with a pixel loss through the frozen decoder. |
+| **Fix** | Two changes in `train_dynamics.py`: small noise on the inputs during one-step training, so the model learns to *correct* errors, and **closed-loop training**, where the model must run 5, then 15, then 30 steps on its own predictions, with a pixel loss through the frozen decoder. |
 | **Rule** | **Train under the conditions you will deploy in.** |
 
-**Measured in this repo** (20 unseen test episodes, 10 warm-up frames, then the model dreams on its own):
-
-| Steps into the dream | 1 | 5 | 10 | 20 | 30 |
-|---|---|---|---|---|---|
-| One-step training only | 0.0027 | 0.0230 | 0.0842 | 0.1420 | 0.1816 |
-| **+ closed-loop training** | 0.0039 | 0.0251 | **0.0590** | **0.0946** | **0.1303** |
-
-*Object-weighted pixel MSE, lower is better.* Closed-loop training cuts the error by about **30%** from step 10 onwards. It is slightly *worse* at step 1: the model gives up a little one-step precision in exchange for stability, which is the right trade for a model meant to be rolled out.
-
-![dream error vs training](outputs/dream_error_vs_training.png)
+**Measured in this repo:** see the table under lesson 8, where closed-loop training alone is the baseline.
 
 ## 7. Make the easy answer easy to express
 
@@ -83,6 +74,30 @@ Each lesson follows the same pattern:
 | **What happens** | Most of the scene does not change between frames, but the network must reproduce all of it every step. When unsure, it averages, and the ball fades. |
 | **Fix** | The network predicts the *change*, `z_{t+1} − z_t`. "Nothing moves" becomes the default. |
 | **Rule** | **Parameterise the output so the common case is the simple case.** It's the same idea that makes residual networks work. |
+
+## 8. Keep the model on the data it knows
+
+| | |
+|---|---|
+| **Basic thinking** | While dreaming, feed the predicted code straight back in as the next input. |
+| **What happens** | Each prediction lands slightly off the set of codes that real frames produce. Off that set, the decoder has never learned what to draw, and the model never learned what comes next. The errors carry the code further away every step, and the ball **fades into blur** within ~15 steps, even though the paddle stays correct. |
+| **Fix** | **Re-encoding:** after each imagined step, decode the frame and encode it again. The encoder can only output codes that look like real frames, so this snaps the code back onto familiar ground. The same projection is used inside closed-loop training, so the model learns to work with it. |
+| **Rule** | **Errors are worst where the model has never been.** When outputs are fed back as inputs, keep them in the region the model was trained on: project, clip, or re-encode. |
+
+**Measured in this repo** (20 unseen test episodes, 10 warm-up frames, then the model dreams on its own):
+
+| Steps into the dream | 1 | 5 | 10 | 20 | 30 | 40 |
+|---|:-:|:-:|:-:|:-:|:-:|:-:|
+| Ball error, closed-loop training only (px) | 1.6 | 2.0 | 3.0 | 8.6 | 16.8 | 25.1 |
+| + re-encode while dreaming (px) | 1.6 | 2.0 | 2.2 | 5.1 | 9.4 | 13.6 |
+| + re-encode in training too (px) | 1.2 | 1.9 | 2.2 | 4.5 | 7.7 | 11.4 |
+| Ball brightness, closed-loop training only | 96% | 93% | 78% | **39%** | 32% | 35% |
+| + re-encode while dreaming | 96% | 96% | 97% | **96%** | 89% | 86% |
+| + re-encode in training too | 95% | 95% | 94% | **90%** | 87% | 73% |
+
+Re-encoding is the single biggest improvement: the ball stays visible instead of fading. Using it in training as well improves position accuracy, at a small cost in brightness after ~30 steps.
+
+![ball tracking](outputs/ball_tracking.png)
 
 ---
 
@@ -97,6 +112,6 @@ Basic thinking checks whether each part works **on its own**. The fixes above al
 
 ## Open problems this repo does not solve yet
 
-- **Drift is reduced, not removed.** The autoencoder and dynamics model are trained separately, so the codes are never shaped for prediction from the start. Training them jointly (as Dreamer-style models do) is the natural next step.
+- **Drift is reduced, not removed.** The ball's *position* still drifts (~11 px after 40 steps), especially after fast bounces near corners. The autoencoder and dynamics model are trained separately, so the codes are never shaped for prediction from the start. Training them jointly (as Dreamer-style models do) is the natural next step.
 - **The world is deterministic.** With real randomness (for example, a ball that respawns at a random place), a deterministic predictor would output the *average* of all possible futures, a blurry future that never happens. Stochastic latents or mixture outputs are needed for that.
 - **No agent yet.** The world model is learned, but nothing is trained to *act* inside it.

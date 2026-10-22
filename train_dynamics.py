@@ -10,6 +10,10 @@
 #      on its OWN predictions (K = 5, then 15). Each predicted code is also decoded
 #      and compared with the real frame, so the imagined ball stays sharp.
 #      Phase 2 is what keeps the dream from drifting.
+#   Re-encoding: after every imagined step the predicted frame is decoded and
+#   encoded again. This snaps the code back to one the encoder could actually
+#   produce, so it cannot drift into regions that decode to a blurry, fading ball.
+#   The same projection is used during closed-loop training and while dreaming.
 #
 # Usage:
 #   python train_dynamics.py
@@ -52,9 +56,17 @@ def train_one_step(dynamics, z, actions, args, device):
     return optimizer
 
 
-def train_closed_loop(dynamics, decoder, z, actions, frames, z_mean, z_std, optimizer, args, device):
+def project(ae, z, z_mean, z_std):
+    """Decode a (normalised) code to a frame and encode it again."""
+    frame = ae.decoder(z * z_std + z_mean)
+    return (ae.encoder(frame) - z_mean) / z_std, frame
+
+
+def train_closed_loop(dynamics, ae, z, actions, frames, z_mean, z_std, optimizer, args, device):
     N, T1 = z.shape[:2]
-    stages = [(5, args.lr, args.closed_epochs_short), (15, args.lr * 0.3, args.closed_epochs_long)]
+    stages = [(5, args.lr, args.closed_epochs_short),
+              (15, args.lr * 0.3, args.closed_epochs_long),
+              (30, args.lr * 0.1, args.closed_epochs_longest)]
     for K, lr, n_epochs in stages:
         for group in optimizer.param_groups:
             group["lr"] = lr
@@ -75,9 +87,11 @@ def train_closed_loop(dynamics, decoder, z, actions, frames, z_mean, z_std, opti
                     z_cur, h = dynamics.step(z_cur, a_ep[:, t], h)
                     loss = loss + F.mse_loss(z_cur, z_ep[:, t + 1])
 
-                    frame_pred = decoder(z_cur * z_std + z_mean)
+                    z_proj, frame_pred = project(ae, z_cur, z_mean, z_std)
                     frame_real = frames[idx, t + 1].to(device)
                     loss = loss + args.pixel_weight * weighted_bce(frame_pred, frame_real)
+                    if args.reencode:
+                        z_cur = z_proj
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -89,7 +103,7 @@ def train_closed_loop(dynamics, decoder, z, actions, frames, z_mean, z_std, opti
 
 
 @torch.no_grad()
-def open_loop_error(dynamics, decoder, z, actions, frames, z_mean, z_std, device, context=10, horizon=30):
+def open_loop_error(dynamics, ae, z, actions, frames, z_mean, z_std, device, reencode, context=10, horizon=40):
     """Pixel error at each step of a dream on the test set."""
     z, a = z.to(device), actions.to(device)
     _, h = dynamics(z[:, :context], a[:, :context])
@@ -98,7 +112,9 @@ def open_loop_error(dynamics, decoder, z, actions, frames, z_mean, z_std, device
     for k in range(horizon):
         t = context + k
         z_cur, h = dynamics.step(z_cur, a[:, t], h)
-        pred = decoder(z_cur * z_std + z_mean)
+        z_proj, pred = project(ae, z_cur, z_mean, z_std)
+        if reencode:
+            z_cur = z_proj
         errors.append(weighted_mse(pred, frames[:, t + 1].to(device)).item())
     return errors
 
@@ -108,6 +124,9 @@ def main():
     parser.add_argument("--one-step-epochs", type=int, default=25)
     parser.add_argument("--closed-epochs-short", type=int, default=25)
     parser.add_argument("--closed-epochs-long", type=int, default=15)
+    parser.add_argument("--closed-epochs-longest", type=int, default=10)
+    parser.add_argument("--no-reencode", dest="reencode", action="store_false",
+                        help="do not snap codes back through the autoencoder after each step")
     parser.add_argument("--batch-size", type=int, default=16)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--input-noise", type=float, default=0.05)
@@ -143,25 +162,30 @@ def main():
     dynamics = Dynamics(LATENT_DIM).to(device)
 
     optimizer = train_one_step(dynamics, train_z, train_actions, args, device)
-    before = open_loop_error(dynamics, ae.decoder, test_z, test_actions, test_frames, z_mean_d, z_std_d, device)
+    test = (dynamics, ae, test_z, test_actions, test_frames, z_mean_d, z_std_d, device)
+    results = {"one-step training": open_loop_error(*test, reencode=False),
+               "one-step + re-encode": open_loop_error(*test, reencode=True)}
 
-    train_closed_loop(dynamics, ae.decoder, train_z, train_actions, train_frames,
+    train_closed_loop(dynamics, ae, train_z, train_actions, train_frames,
                       z_mean_d, z_std_d, optimizer, args, device)
-    after = open_loop_error(dynamics, ae.decoder, test_z, test_actions, test_frames, z_mean_d, z_std_d, device)
+    results["closed-loop"] = open_loop_error(*test, reencode=False)
+    results["closed-loop + re-encode"] = open_loop_error(*test, reencode=True)
 
+    steps = (1, 5, 10, 20, 30, 40)
     print("\ndream error on test episodes (weighted pixel MSE):")
-    print("  step:                 " + "  ".join(f"{s:>6d}" for s in (1, 5, 10, 20, 30)))
-    for name, err in [("one-step training", before), ("+ closed-loop", after)]:
-        print(f"  {name:<20s}" + "  ".join(f"{err[s - 1]:.4f}" for s in (1, 5, 10, 20, 30)))
+    print("  step:                     " + "  ".join(f"{s:>6d}" for s in steps))
+    for name, err in results.items():
+        print(f"  {name:<24s}" + "  ".join(f"{err[s - 1]:.4f}" for s in steps))
 
     os.makedirs("checkpoints", exist_ok=True)
-    torch.save({"dynamics": dynamics.state_dict(), "z_mean": z_mean, "z_std": z_std},
+    torch.save({"dynamics": dynamics.state_dict(), "z_mean": z_mean, "z_std": z_std,
+                "reencode": args.reencode},
                "checkpoints/dynamics.pt")
-    save_plot(before, after, "outputs")
+    save_plot(results, "outputs")
     print("saved checkpoints/dynamics.pt")
 
 
-def save_plot(before, after, out_dir):
+def save_plot(results, out_dir):
     try:
         import matplotlib
         matplotlib.use("Agg")
@@ -170,10 +194,9 @@ def save_plot(before, after, out_dir):
         print("matplotlib not installed, skipping plot")
         return
     os.makedirs(out_dir, exist_ok=True)
-    steps = range(1, len(before) + 1)
-    plt.figure(figsize=(5.5, 3.5))
-    plt.plot(steps, before, label="one-step training only")
-    plt.plot(steps, after, label="+ closed-loop training")
+    plt.figure(figsize=(6, 3.8))
+    for name, err in results.items():
+        plt.plot(range(1, len(err) + 1), err, label=name)
     plt.xlabel("steps into the dream"), plt.ylabel("weighted pixel MSE")
     plt.legend(), plt.tight_layout()
     plt.savefig(os.path.join(out_dir, "dream_error_vs_training.png"), dpi=120)

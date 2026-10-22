@@ -5,6 +5,8 @@
 # 2. Then stop showing real frames. The model feeds its own predictions
 #    back in, using the same actions that were played in the real game.
 # 3. Decode the imagined latents and compare them with what really happened.
+#    After each step the decoded frame is encoded again (re-encoding), which
+#    keeps the imagined ball from fading. Use --no-reencode to see the difference.
 #
 # Usage:
 #   python dream.py --episode 0 --context 10 --horizon 40
@@ -19,7 +21,7 @@ from utils import get_device, load_episodes
 
 
 @torch.no_grad()
-def dream(ae, dynamics, frames, actions, z_mean, z_std, context, horizon, device):
+def dream(ae, dynamics, frames, actions, z_mean, z_std, context, horizon, device, reencode=True):
     """frames: (T+1, 3, 32, 32), actions: (T,) for one episode.
     Returns the real and the dreamed frames context+1 .. context+horizon."""
     z_real = (ae.encoder(frames.to(device)) - z_mean) / z_std     # normalised codes (T+1, D)
@@ -34,9 +36,13 @@ def dream(ae, dynamics, frames, actions, z_mean, z_std, context, horizon, device
     imagined = []
     for t in range(context, context + horizon):
         z, h = dynamics.step(z, a[t:t + 1], h)
-        imagined.append(z)
+        frame = ae.decoder(z * z_std + z_mean)
+        imagined.append(frame)
+        if reencode:
+            # snap the code back to one the encoder could produce for this frame
+            z = (ae.encoder(frame) - z_mean) / z_std
 
-    dreamed = ae.decoder(torch.cat(imagined) * z_std + z_mean)
+    dreamed = torch.cat(imagined)
     real = frames[context + 1:context + horizon + 1]
     return real.cpu(), dreamed.cpu()
 
@@ -105,6 +111,9 @@ def main():
     parser.add_argument("--episode", type=int, default=0)
     parser.add_argument("--context", type=int, default=10)
     parser.add_argument("--horizon", type=int, default=40)
+    parser.add_argument("--no-reencode", dest="reencode", action="store_false",
+                        help="feed raw predicted codes back in (shows the ball fading)")
+    parser.add_argument("--out", default="outputs/dream.gif")
     parser.add_argument("--data-dir", default="data")
     args = parser.parse_args()
 
@@ -121,14 +130,14 @@ def main():
 
     frames, actions = load_episodes(os.path.join(args.data_dir, "pong_test.npz"))
     real, dreamed = dream(ae, dynamics, frames[args.episode], actions[args.episode],
-                          z_mean, z_std, args.context, args.horizon, device)
+                          z_mean, z_std, args.context, args.horizon, device, args.reencode)
 
     error = ((real - dreamed) ** 2).mean(dim=(1, 2, 3))
     print(f"pixel MSE  step 1: {error[0]:.5f} | step 10: {error[min(9, len(error) - 1)]:.5f} "
           f"| step {len(error)}: {error[-1]:.5f}")
 
-    if save_gif(real, dreamed, "outputs/dream.gif"):
-        print("saved outputs/dream.gif")
+    if save_gif(real, dreamed, args.out):
+        print(f"saved {args.out}")
     save_strip_and_error(real, dreamed, "outputs")
 
 
